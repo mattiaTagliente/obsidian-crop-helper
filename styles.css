@@ -1,0 +1,263 @@
+/* ── Full-screen modal ────────────────────────────────────────────── */
+
+.crop-helper-modal {
+  width: 95vw !important;
+  height: 92vh !important;
+  max-width: none !important;
+  max-height: none !important;
+}
+
+.crop-helper-modal .modal-content {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+
+/* ── Top bar ──────────────────────────────────────────────────────── */
+
+.crop-top-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.crop-info {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.crop-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+
+.crop-filter-label {
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.crop-wrong-match {
+  font-size: 12px;
+  color: var(--text-warning);
+  background: transparent;
+  border: 1px solid var(--text-warning);
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 2px 8px;
+}
+
+.crop-wrong-match:hover {
+  background: var(--text-warning);
+  color: var(--background-primary);
+}
+
+.crop-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  width: 100%;
+}
+
+/* ── Main area ────────────────────────────────────────────────────── */
+
+.crop-main-area {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  position: relative;
+}
+
+/* ── Canvas container ─────────────────────────────────────────────── */
+
+.crop-canvas-container {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  outline: none;
+}
+
+.crop-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+}
+
+/* ── Preview ──────────────────────────────────────────────────────── */
+
+.crop-preview-container {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 6px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+  z-index: 10;
+  pointer-events: none;
+}
+
+.crop-preview-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-align: center;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.crop-preview-canvas {
+  display: block;
+  max-width: 200px;
+  max-height: 200px;
+  border-radius: 3px;
+}
+
+/* ── Browse layout (sidebar + canvas) ─────────────────────────────── */
+
+.crop-browse-layout {
+  display: flex;
+}
+
+.crop-sidebar {
+  width: 240px;
+  min-width: 240px;
+  overflow-y: auto;
+  background: var(--background-secondary);
+  border-right: 1px solid var(--background-modifier-border);
+  outline: none;
+}
+
+.crop-right-area {
+  flex: 1;
+  position: relative;
+  display: flex;
+  overflow: hidden;
+}
+
+/* ── Sidebar items ────────────────────────────────────────────────── */
+
+.crop-sidebar-item {
+  display: flex;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--background-modifier-border);
+  transition: background 0.1s;
+}
+
+.crop-sidebar-item:hover {
+  background: var(--background-modifier-hover);
+}
+
+.crop-sidebar-item.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+}
+
+.crop-sidebar-item.is-active .crop-sidebar-page,
+.crop-sidebar-item.is-active .crop-sidebar-badge {
+  color: var(--text-on-accent);
+  opacity: 0.85;
+}
+
+.crop-sidebar-item.is-corrected:not(.is-active) {
+  opacity: 0.6;
+}
+
+.crop-sidebar-thumb {
+  width: 60px;
+  height: 60px;
+  flex-shrink: 0;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--background-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.crop-sidebar-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.crop-thumb-error {
+  color: var(--text-muted);
+  font-size: 20px;
+}
+
+.crop-sidebar-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+
+.crop-sidebar-name {
+  font-size: 11px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crop-sidebar-page {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.crop-sidebar-badge {
+  font-size: 9px;
+  color: var(--text-success);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+/* ── Pending-crop decoration (render_fallback assets) ──────────────── */
+/* Set by markdown post-processor on image embeds whose .provenance.json
+   entry has pending_crop=true. Auto-clears when CropModal saves. */
+
+.crop-helper-pending {
+  outline: 2px dashed var(--text-warning);
+  outline-offset: 2px;
+  position: relative;
+}
+
+.crop-helper-pending::after {
+  content: "✂ da rifinire";
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: var(--text-warning);
+  color: var(--background-primary);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.3px;
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* For .internal-embed that wraps an <img>, the badge sits on the wrapper */
+span.internal-embed.crop-helper-pending {
+  display: inline-block;
+}

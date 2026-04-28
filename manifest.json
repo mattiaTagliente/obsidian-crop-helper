@@ -1,0 +1,9 @@
+{
+  "id": "crop-helper",
+  "name": "Crop Helper",
+  "version": "1.0.0",
+  "minAppVersion": "1.0.0",
+  "description": "Re-crop images from the content mirror pipeline with a visual rectangle selector",
+  "author": "Mattia Tagliente",
+  "isDesktopOnly": true
+}

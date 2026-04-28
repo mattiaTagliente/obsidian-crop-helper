@@ -1,0 +1,19 @@
+{
+  "name": "obsidian-crop-helper",
+  "version": "1.0.0",
+  "description": "Re-crop images from content mirror pipeline",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs production"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.21.0",
+    "obsidian": "latest",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "pdfjs-dist": "^4.4.0"
+  }
+}
