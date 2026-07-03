@@ -81,11 +81,16 @@ export class CropModal extends Modal {
   private resolver: SourceResolver;
   private resolved: ResolvedImage;
   private crop: CanvasCrop | null = null;
+  /** Invoked when the user declares the auto-match wrong. Lets the caller
+   *  re-pick the correct mirror source + page (records manual provenance).
+   *  When absent, the button falls back to browsing the current source. */
+  private onWrongMatch?: () => void;
 
-  constructor(app: App, resolver: SourceResolver, resolved: ResolvedImage) {
+  constructor(app: App, resolver: SourceResolver, resolved: ResolvedImage, onWrongMatch?: () => void) {
     super(app);
     this.resolver = resolver;
     this.resolved = resolved;
+    this.onWrongMatch = onWrongMatch;
   }
 
   async onOpen() {
@@ -106,12 +111,19 @@ export class CropModal extends Modal {
 
     const controls = topBar.createDiv({ cls: 'crop-controls' });
 
-    // Show "Wrong match?" link for fuzzy matches
+    // Show "Wrong match?" link for non-exact matches. Re-picking the SOURCE
+    // is the correct recovery: the whole premise is that r.mirrorSource is
+    // wrong, so browsing it again is a dead end. onWrongMatch opens a
+    // course-wide mirror + page picker and records manual provenance.
     if (r.matchMethod !== 'sha256') {
-      const wrongBtn = controls.createEl('button', { text: 'Wrong match? Browse...', cls: 'crop-wrong-match' });
+      const wrongBtn = controls.createEl('button', {
+        text: this.onWrongMatch ? 'Wrong source? Pick correct...' : 'Wrong match? Browse...',
+        cls: 'crop-wrong-match',
+      });
       wrongBtn.addEventListener('click', () => {
         this.close();
-        new BrowseModal(this.app, this.resolver, r.coursePath, r.mirrorSource).open();
+        if (this.onWrongMatch) this.onWrongMatch();
+        else new BrowseModal(this.app, this.resolver, r.coursePath, r.mirrorSource).open();
       });
     }
 

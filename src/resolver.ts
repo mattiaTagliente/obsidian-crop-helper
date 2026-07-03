@@ -199,6 +199,28 @@ function hammingDistance(a: string, b: string): number {
   return dist;
 }
 
+/** Count set bits in a 16-hex-char (64-bit) dHash. */
+function dhashOnes(hex: string): number {
+  let ones = 0;
+  for (let i = 0; i < hex.length; i++) {
+    const n = parseInt(hex[i], 16);
+    ones += ((n >> 3) & 1) + ((n >> 2) & 1) + ((n >> 1) & 1) + (n & 1);
+  }
+  return ones;
+}
+
+/** A dHash is degenerate when the image is near-uniform (few luminance
+ *  transitions): almost all bits 0 (e.g. an all-black slide → 0 ones) or
+ *  almost all 1. Such hashes carry no discriminative signal and act as
+ *  attractors that pull unrelated low-detail assets within the fuzzy hamming
+ *  threshold (root cause of the DDES-formula ↔ black-Fortran-slide mismatch).
+ *  Real content dHashes sit in the ~16–48 band. Fuzzy tiers skip these; true
+ *  byte-identical duplicates are still caught upstream by the sha256 tier. */
+function isDegenerateDhash(hex: string): boolean {
+  const ones = dhashOnes(hex);
+  return ones < 8 || ones > 56;
+}
+
 /** Load an image from ArrayBuffer, return HTMLImageElement */
 function loadImage(buffer: ArrayBuffer, mime = 'image/png'): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -338,6 +360,29 @@ export class SourceResolver {
     return null;
   }
 
+  /** Resolve a mirror-relative artefact path with auto-fallback for layout drift.
+   *  Canonical layout (material-enrich SKILL.md): cascade_report + p<N>_render +
+   *  p<N>_grid live at the mirror root; sub-images live under images/. Older
+   *  cascade_extract runs sometimes placed root artefacts inside images/ — this
+   *  helper tries the canonical location first and the drifted one second,
+   *  returning whichever exists. No disk mutations; safe in OneDrive scenarios.
+   *  Use the "Normalize mirror layout" command to repair drift on disk. */
+  private async resolveMirrorFile(mirrorDir: string, fileName: string): Promise<string | null> {
+    if (fileName.includes('/')) {
+      const p = normalizePath(`${mirrorDir}/${fileName}`);
+      return (await this.app.vault.adapter.exists(p)) ? p : null;
+    }
+    const isRootArtefact = fileName === '_cascade_report.json'
+      || /^p\d+_(render|grid)\.(png|jpe?g)$/i.test(fileName);
+    const primary = isRootArtefact ? mirrorDir : `${mirrorDir}/images`;
+    const fallback = isRootArtefact ? `${mirrorDir}/images` : mirrorDir;
+    const p1 = normalizePath(`${primary}/${fileName}`);
+    if (await this.app.vault.adapter.exists(p1)) return p1;
+    const p2 = normalizePath(`${fallback}/${fileName}`);
+    if (await this.app.vault.adapter.exists(p2)) return p2;
+    return null;
+  }
+
   /** List all mirror sources for a course */
   async findMirrors(coursePath: string): Promise<MirrorSource[]> {
     const mirrorRoot = normalizePath(`${coursePath}/materiale/.content_mirror`);
@@ -349,8 +394,8 @@ export class SourceResolver {
     for (const folder of listing.folders) {
       const name = folder.split('/').pop()!;
       let cascadeReport: CascadeReport | null = null;
-      const reportPath = normalizePath(`${folder}/_cascade_report.json`);
-      if (await this.app.vault.adapter.exists(reportPath)) {
+      const reportPath = await this.resolveMirrorFile(folder, '_cascade_report.json');
+      if (reportPath) {
         try {
           cascadeReport = JSON.parse(await this.app.vault.adapter.read(reportPath));
         } catch { /* skip */ }
@@ -806,15 +851,24 @@ export class SourceResolver {
     // low-entropy mirror images (mostly-blank scans) attracted unrelated assets
     // — e.g. a single mirror page collected 7 unrelated assets at dist 9-10.
     // Aspect-ratio gate (≥0.85) blocks portrait/landscape mismatches.
+    // Entropy gate: a near-uniform asset (or mirror candidate) produces a
+    // degenerate dHash that matches anything at small hamming distance. Skip
+    // fuzzy matching for such hashes — an exact duplicate is still resolved by
+    // the sha256 tier above; a non-identical low-entropy asset falls through to
+    // name_page/dims or stays unmatched (→ manual picker) rather than binding
+    // to a spurious all-black slide.
     const assetAspectT2 = assetDims.w / assetDims.h;
     let bestDhash: MirrorEntry | null = null;
     let bestDist = 6;
-    for (const me of mirrorEntries) {
-      const meAspect = me.w / me.h;
-      const aRatio = Math.min(assetAspectT2, meAspect) / Math.max(assetAspectT2, meAspect);
-      if (aRatio < 0.85) continue;
-      const dist = hammingDistance(assetDhash, me.dhash);
-      if (dist < bestDist) { bestDist = dist; bestDhash = me; }
+    if (!isDegenerateDhash(assetDhash)) {
+      for (const me of mirrorEntries) {
+        if (isDegenerateDhash(me.dhash)) continue;
+        const meAspect = me.w / me.h;
+        const aRatio = Math.min(assetAspectT2, meAspect) / Math.max(assetAspectT2, meAspect);
+        if (aRatio < 0.85) continue;
+        const dist = hammingDistance(assetDhash, me.dhash);
+        if (dist < bestDist) { bestDist = dist; bestDhash = me; }
+      }
     }
     if (bestDhash && bestDist <= 5) {
       return {
@@ -1062,12 +1116,13 @@ export class SourceResolver {
     const mirrorDir = normalizePath(`${coursePath}/materiale/.content_mirror/${prov.mirror}`);
     if (!await this.app.vault.adapter.exists(mirrorDir)) return null;
     let cascadeReport: CascadeReport | null = null;
-    const reportPath = normalizePath(`${mirrorDir}/_cascade_report.json`);
-    if (await this.app.vault.adapter.exists(reportPath)) {
+    const reportPath = await this.resolveMirrorFile(mirrorDir, '_cascade_report.json');
+    if (reportPath) {
       try { cascadeReport = JSON.parse(await this.app.vault.adapter.read(reportPath)); } catch { /* */ }
     }
     const ms: MirrorSource = { name: prov.mirror, dir: mirrorDir, cascadeReport };
-    const mirrorImagePath = normalizePath(`${mirrorDir}/${mirrorFileSubPath(prov.mirrorFile)}`);
+    const mirrorImagePath = (await this.resolveMirrorFile(mirrorDir, prov.mirrorFile))
+      ?? normalizePath(`${mirrorDir}/${mirrorFileSubPath(prov.mirrorFile)}`);
     const renderPath = await this.resolveRender(ms, prov.page);
     // Page renders are immutable canvases for re-crop. Override any legacy
     // sidecar entry that asserted writeBackToMirror=true on a pNNN_render.
@@ -1134,13 +1189,14 @@ export class SourceResolver {
 
     const mirrorDir = normalizePath(`${coursePath}/materiale/.content_mirror/${entry.mirror}`);
     let cascadeReport: CascadeReport | null = null;
-    const reportPath = normalizePath(`${mirrorDir}/_cascade_report.json`);
-    if (await this.app.vault.adapter.exists(reportPath)) {
+    const reportPath = await this.resolveMirrorFile(mirrorDir, '_cascade_report.json');
+    if (reportPath) {
       try { cascadeReport = JSON.parse(await this.app.vault.adapter.read(reportPath)); } catch { /* */ }
     }
 
     const ms: MirrorSource = { name: entry.mirror, dir: mirrorDir, cascadeReport };
-    const mirrorImagePath = normalizePath(`${mirrorDir}/${mirrorFileSubPath(entry.mirrorFile)}`);
+    const mirrorImagePath = (await this.resolveMirrorFile(mirrorDir, entry.mirrorFile))
+      ?? normalizePath(`${mirrorDir}/${mirrorFileSubPath(entry.mirrorFile)}`);
     const renderPath = await this.resolveRender(ms, entry.page);
 
     // Page renders are immutable canvases for re-crop — never write back
@@ -1173,8 +1229,8 @@ export class SourceResolver {
     // 1. CASCADE REPORT (authoritative)
     if (report?.pages[String(page)]?.grid?.render_file) {
       const rf = report.pages[String(page)].grid.render_file;
-      const p = normalizePath(`${dir}/${rf}`);
-      if (await this.app.vault.adapter.exists(p)) return p;
+      const p = await this.resolveMirrorFile(dir, rf);
+      if (p) return p;
     }
 
     // 2. Filename patterns. Sidecar `page` is 1-based — try that first.
@@ -1189,8 +1245,8 @@ export class SourceResolver {
     ];
     for (const pad of candidates) {
       for (const ext of ['png', 'jpg']) {
-        const p = normalizePath(`${dir}/p${pad}_render.${ext}`);
-        if (await this.app.vault.adapter.exists(p)) return p;
+        const p = await this.resolveMirrorFile(dir, `p${pad}_render.${ext}`);
+        if (p) return p;
       }
     }
 
@@ -1347,7 +1403,8 @@ export class SourceResolver {
     // pointing at full-page renders the SHA gate cannot match (renders are
     // bigger than P1/P2 sub-images by design); the modal still works because
     // we drop to "no initial selection" via the null return below.
-    const mirrorImagePath = normalizePath(`${ms.dir}/${mirrorFileSubPath(mirrorImageFile)}`);
+    const mirrorImagePath = (await this.resolveMirrorFile(ms.dir, mirrorImageFile))
+      ?? normalizePath(`${ms.dir}/${mirrorFileSubPath(mirrorImageFile)}`);
     let targetHash: string;
     try {
       targetHash = await sha256(await this.app.vault.adapter.readBinary(mirrorImagePath));

@@ -1,5 +1,5 @@
 import { Plugin, Notice, normalizePath, FuzzySuggestModal, App, setIcon } from 'obsidian';
-import { SourceResolver, MirrorSource } from './resolver';
+import { SourceResolver, MirrorSource, ResolvedImage } from './resolver';
 import { CropModal, BrowseModal } from './crop-modal';
 
 // ── Pickers ──────────────────────────────────────────────────────────────
@@ -144,6 +144,12 @@ export default class CropHelperPlugin extends Plugin {
       callback: () => this.listPendingCrops(),
     });
 
+    this.addCommand({
+      id: 'normalize-mirror-layout',
+      name: 'Normalize mirror layout (repair drifted mirrors)',
+      callback: () => this.normalizeMirrorLayout(),
+    });
+
     // ── Post-processor: decorate render_fallback assets ──
     // Reading-mode image embeds get the .crop-helper-pending class when
     // their asset has pending_crop=true in .provenance.json. Cheap: one
@@ -166,6 +172,67 @@ export default class CropHelperPlugin extends Plugin {
         }
       });
     });
+  }
+
+  /** Repair "layout drift" in content mirrors of the active course. Some older
+   *  cascade_extract runs placed `_cascade_report.json`, `p<N>_render.png` and
+   *  `p<N>_grid.png` under `images/` instead of at the mirror root, where the
+   *  canonical material-enrich layout requires them. The resolver tolerates
+   *  drift in-memory; this command makes the disk layout canonical so other
+   *  tooling (render_fallback.py, validate_manifest.py) sees the expected
+   *  structure too. Cascade report is MOVED (single canonical location);
+   *  render/grid PNGs are COPIED (render_fallback expects copies in images/). */
+  private async normalizeMirrorLayout(): Promise<void> {
+    const noteFile = this.app.workspace.getActiveFile();
+    if (!noteFile) { new Notice('Open a file in a course first'); return; }
+    const coursePath = await this.resolver.detectCoursePath(noteFile.path);
+    if (!coursePath) { new Notice('No course with content mirror found'); return; }
+
+    const mirrorRoot = normalizePath(`${coursePath}/materiale/.content_mirror`);
+    const listing = await this.app.vault.adapter.list(mirrorRoot);
+    let mirrorsTouched = 0;
+    let filesMoved = 0;
+    const errors: string[] = [];
+
+    for (const folder of listing.folders) {
+      const imagesDir = normalizePath(`${folder}/images`);
+      if (!await this.app.vault.adapter.exists(imagesDir)) continue;
+
+      const imgListing = await this.app.vault.adapter.list(imagesDir);
+      let mirrorDirty = false;
+
+      for (const fp of imgListing.files) {
+        const name = fp.split('/').pop()!;
+        const isCascade = name === '_cascade_report.json';
+        const isRenderOrGrid = /^p\d+_(render|grid)\.(png|jpe?g)$/i.test(name);
+        if (!isCascade && !isRenderOrGrid) continue;
+
+        const dst = normalizePath(`${folder}/${name}`);
+        if (await this.app.vault.adapter.exists(dst)) continue;
+
+        try {
+          if (isCascade) {
+            const data = await this.app.vault.adapter.read(fp);
+            await this.app.vault.adapter.write(dst, data);
+            await this.app.vault.adapter.remove(fp);
+          } else {
+            const data = await this.app.vault.adapter.readBinary(fp);
+            await this.app.vault.adapter.writeBinary(dst, data);
+          }
+          filesMoved++;
+          mirrorDirty = true;
+        } catch (e) {
+          errors.push(`${name}: ${e}`);
+          console.error(`[crop-helper] normalize failed for ${fp}:`, e);
+        }
+      }
+      if (mirrorDirty) mirrorsTouched++;
+    }
+
+    this.resolver.invalidateMemCache(coursePath);
+    const summary = `Normalized ${mirrorsTouched} mirror(s), ${filesMoved} file(s)`;
+    new Notice(errors.length ? `${summary} (${errors.length} errors — see console)` : summary, 6000);
+    console.log(`[crop-helper] ${summary}`);
   }
 
   private async listPendingCrops(): Promise<void> {
@@ -249,7 +316,7 @@ export default class CropHelperPlugin extends Plugin {
           if (entry) {
             const res = await this.resolver.resolveFromAsset(fileName, notePath, false);
             if (res && res.renderPath) {
-              new CropModal(this.app, this.resolver, res).open();
+              this.openCropModal(res, fileName, notePath);
               return;
             }
           }
@@ -259,7 +326,7 @@ export default class CropHelperPlugin extends Plugin {
         }
       }
       // Still nothing: manual picker.
-      await this.openManualPicker(fileName, notePath);
+      await this.pickSourceManually(fileName, notePath, 'miss');
       return;
     }
 
@@ -269,11 +336,26 @@ export default class CropHelperPlugin extends Plugin {
       return;
     }
 
-    new CropModal(this.app, this.resolver, result).open();
+    this.openCropModal(result, fileName, notePath);
   }
 
-  /** Manual fallback: user picks mirror + page, match is persisted. */
-  private async openManualPicker(fileName: string, notePath: string) {
+  /** Open the crop modal, wiring the "wrong source" escape hatch so the user
+   *  can re-pick the correct mirror + page (records manual provenance) when
+   *  the automatic match is wrong. */
+  private openCropModal(resolved: ResolvedImage, fileName: string, notePath: string) {
+    new CropModal(
+      this.app, this.resolver, resolved,
+      () => { void this.pickSourceManually(fileName, notePath, 'wrong'); },
+    ).open();
+  }
+
+  /** Manual source picker: user picks mirror + page, match is persisted as
+   *  authoritative provenance, then the crop modal reopens on the correct
+   *  render. Used both as the no-match fallback and as the "wrong source"
+   *  recovery from the crop modal. */
+  private async pickSourceManually(
+    fileName: string, notePath: string, reason: 'miss' | 'wrong' = 'miss',
+  ) {
     const coursePath = await this.resolver.detectCoursePath(notePath);
     if (!coursePath) {
       new Notice('No course with content mirror found for this note');
@@ -285,7 +367,9 @@ export default class CropHelperPlugin extends Plugin {
       return;
     }
 
-    new Notice(`No automatic match for "${fileName}". Pick source manually.`);
+    new Notice(reason === 'wrong'
+      ? `Pick the correct source for "${fileName}".`
+      : `No automatic match for "${fileName}". Pick source manually.`);
 
     const pickMirror = (ms: MirrorSource) => {
       const pages = this.collectPages(ms);
@@ -301,11 +385,15 @@ export default class CropHelperPlugin extends Plugin {
           new Notice(`No render available for page ${page}`);
           return;
         }
-        new CropModal(this.app, this.resolver, resolved).open();
+        this.openCropModal(resolved, fileName, notePath);
       }).open();
     };
 
-    if (mirrors.length === 1) {
+    // Always show the mirror picker on a "wrong source" recovery — a
+    // single-mirror course is not the common case, and forcing the picker
+    // still lets the user confirm/switch rather than auto-reopening the same
+    // (possibly wrong) source.
+    if (mirrors.length === 1 && reason !== 'wrong') {
       pickMirror(mirrors[0]);
     } else {
       new MirrorPicker(this.app, mirrors, pickMirror).open();
